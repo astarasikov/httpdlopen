@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include "httpdlopen.h"
 
 typedef struct
@@ -10,6 +11,7 @@ typedef struct
     char *name;
     char *url;
     void *data;
+    void* mmap;
     size_t size;
 } Library;
 
@@ -20,6 +22,7 @@ static void library_ctor(Library* library,
     library->name = strdup(name);
     library->url = strdup(url);
     library->data = malloc(1);
+    library->mmap = NULL;
     library->size = 0;
 }
 
@@ -28,6 +31,12 @@ static void library_dtor(Library* library)
     free(library->name);
     free(library->url);
     free(library->data);
+    if (library->mmap)
+        munmap(library->mmap, library->size + 1);
+    library->name = NULL;
+    library->url  = NULL;
+    library->data = NULL;
+    library->mmap = NULL;
 }
 
 static size_t append_callback(void *data,
@@ -86,10 +95,22 @@ static int library_download(Library *library)
     {
         fprintf(stderr, "curl_easy_perform() failed: %s\n",
                 curl_easy_strerror(res));
-        free(library->data);
-        library->data = malloc(1);
-        library->size = 0;
+        const char* name = library->name;
+        const char* url = library->url;
+        library->name = NULL;
+        library->url = NULL;
+        library_dtor(library);
+        library_ctor(library, name, url);
         result = 1;
+    }
+    else
+    {
+        library->mmap = mmap(0,
+                             library->size + 1,
+                             PROT_READ|PROT_WRITE|PROT_EXEC,
+                             MAP_PRIVATE|MAP_ANON,
+                             -1, 0);
+        memcpy(library->mmap, library->data, library->size+1);
     }
 
     /* cleanup curl stuff */
@@ -148,10 +169,10 @@ void* httpdlopen_get(const char* name)
         return NULL;
     result = &node->library;
     if (result->size != 0)
-        return result->data;
+        return result->mmap;
     if (library_download(result) != 0)
         return NULL;
-    return result->data;
+    return result->mmap;
 }
 
 void* (*default_dlopen)(const char*, int) = NULL;

@@ -37,7 +37,7 @@ void* make_dl(const char* name, const char* url, const char* function)
     void* lib;
     void* fun;
 
-    lib = dlopen(name, RTLD_NOW);
+    lib = dlopen(name, RTLD_LAZY);
 
     if (lib)
     {
