@@ -1,4 +1,5 @@
 #include <curl/curl.h>
+#include <dlfcn.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
@@ -153,9 +154,12 @@ void* httpdlopen_get(const char* name)
     return result->data;
 }
 
+void* (*default_dlopen)(const char*, int) = NULL;
+
 void httpdlopen_init()
 {
     curl_global_init(CURL_GLOBAL_ALL);
+    default_dlopen = dlsym(RTLD_NEXT, "dlopen");
 }
 
 void httpdlopen_deinit()
@@ -171,4 +175,19 @@ void httpdlopen_deinit()
 
     /* we're done with libcurl, so clean it up */
     curl_global_cleanup();
+}
+
+void* dlopen(const char* path, int mode)
+{
+    void* loaded;
+    if (!default_dlopen)
+    {
+        fprintf(stderr, "can not find default_dlopen, forgot call httpdlopen_init?");
+        return NULL;
+    }
+    loaded = httpdlopen_get(path);
+    if (loaded)
+        return loaded;
+    else
+        return (*default_dlopen)(path, mode);
 }
