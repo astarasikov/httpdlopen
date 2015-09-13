@@ -99,8 +99,8 @@ static int library_download(Library *library)
 
 struct Node
 {
-    Library library;
     struct Node* next;
+    Library library;
 };
 typedef struct Node Node;
 
