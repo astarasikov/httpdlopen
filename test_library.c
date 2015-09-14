@@ -1,6 +1,7 @@
-
+#include <stdio.h>
 int fibonacci(int number)
 {
+    fprintf(stderr, "%s:%d\n", __func__, number);
     switch (number)
     {
     case 0:

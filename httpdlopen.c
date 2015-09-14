@@ -1,3 +1,5 @@
+#define _GNU_SOURCE
+
 #include <curl/curl.h>
 #include <dlfcn.h>
 #include <stddef.h>
@@ -12,6 +14,7 @@ typedef struct
     char *url;
     void *data;
     void* mmap;
+    char* tmp_file_name;
     size_t size;
 } Library;
 
@@ -24,10 +27,13 @@ static void library_ctor(Library* library,
     library->data = malloc(1);
     library->mmap = NULL;
     library->size = 0;
+    library->tmp_file_name = NULL;
 }
 
 static void library_dtor(Library* library)
 {
+    unlink(library->tmp_file_name);
+    free(library->tmp_file_name);
     free(library->name);
     free(library->url);
     free(library->data);
@@ -37,6 +43,7 @@ static void library_dtor(Library* library)
     library->url  = NULL;
     library->data = NULL;
     library->mmap = NULL;
+    library->tmp_file_name = NULL;
 }
 
 static size_t append_callback(void *data,
@@ -111,6 +118,23 @@ static int library_download(Library *library)
                              MAP_PRIVATE|MAP_ANON,
                              -1, 0);
         memcpy(library->mmap, library->data, library->size+1);
+
+        library->tmp_file_name = strdup(tmpnam(NULL));
+        if (!library->tmp_file_name) {
+            fprintf(stderr, "%s: failed to create temporary name\n", __func__);
+            exit(-1);
+        }
+        FILE* fd = fopen(library->tmp_file_name, "wb");
+        if (!fd) {
+            fprintf(stderr, "%s: failed to open temporary file\n", __func__);
+            exit(-1);
+        }
+        if (1 != fwrite(library->mmap, library->size + 1, 1, fd)) {
+            fprintf(stderr, "%s: failed to write to the temporary file", __func__);
+            exit(-1);
+        }
+        fflush(fd);
+        fclose(fd);
     }
 
     /* cleanup curl stuff */
@@ -161,7 +185,7 @@ void httpdlopen_set(const char* name, const char* url)
     library_ctor(&(node->library), name, url);
 }
 
-void* httpdlopen_get(const char* name)
+void* httpdlopen_get(const char* name, void *out)
 {
     Library* result = NULL;
     Node* node = table_node_find(name);
@@ -172,6 +196,9 @@ void* httpdlopen_get(const char* name)
         return result->mmap;
     if (library_download(result) != 0)
         return NULL;
+    if (out) {
+        *((Library**) out) = result;
+    }
     return result->mmap;
 }
 
@@ -179,8 +206,11 @@ void* (*default_dlopen)(const char*, int) = NULL;
 
 void httpdlopen_init()
 {
+    fprintf(stderr, "+1\n");
     curl_global_init(CURL_GLOBAL_ALL);
+    fprintf(stderr, "+2\n");
     default_dlopen = dlsym(RTLD_NEXT, "dlopen");
+    fprintf(stderr, "+3\n");
 }
 
 void httpdlopen_deinit()
@@ -201,14 +231,30 @@ void httpdlopen_deinit()
 void* dlopen(const char* path, int mode)
 {
     void* loaded;
+    
+    if (!default_dlopen) {
+        httpdlopen_init();
+    }
+
     if (!default_dlopen)
     {
         fprintf(stderr, "can not find default_dlopen, forgot call httpdlopen_init?");
         return NULL;
     }
-    loaded = httpdlopen_get(path);
-    if (loaded)
-        return loaded;
+    Library *lib = NULL;
+    loaded = httpdlopen_get(path, &lib);
+    if (loaded) {
+        if (!lib) {
+            fprintf(stderr, "%s: loaded && !lib\n");
+            exit(-1);
+        }
+        fprintf(stderr, "%s: tmp_file_name=%s\n", __func__, lib->tmp_file_name);
+    }
+
+    if (loaded) {
+        void *ptr = (*default_dlopen)(lib->tmp_file_name, mode);//loaded;
+        return ptr;
+    }
     else
         return (*default_dlopen)(path, mode);
 }
